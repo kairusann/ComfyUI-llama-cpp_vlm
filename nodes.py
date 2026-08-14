@@ -284,7 +284,13 @@ class LLAMA_CPP_STORAGE:
         else:
             if load_mtp:
                 raise RuntimeError('"load_mtp" is unavailable! Please upgrade your llama-cpp-python.')
-            
+
+        # The JamePeng fork logs "control-looking token" overrides at ERROR level,
+        # which verbose=False cannot suppress. Filter it so benign tokenizer
+        # metadata quirks (e.g. '</s>' not marked as control) don't spam the log.
+        if "log_filters" in inspect.signature(Llama.__init__).parameters:
+            kwargs["log_filters"] = ["control-looking token"]
+
         cls.llm = Llama(**kwargs)
 
 any_type = AnyType("*")
