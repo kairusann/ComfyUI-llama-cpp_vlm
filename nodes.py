@@ -185,6 +185,10 @@ class LLAMA_CPP_STORAGE:
     def clean(cls, all=False):
         try:
             if cls.llm:
+                if hasattr(cls.llm, "unload_all_loras"):
+                    # The JamePeng fork crashes in unload_lora() when close() is
+                    # called with LoRA adapters still loaded, so unload them first.
+                    cls.llm.unload_all_loras()
                 cls.llm.close()
         except Exception:
             pass
