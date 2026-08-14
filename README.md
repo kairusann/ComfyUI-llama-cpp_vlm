@@ -18,6 +18,7 @@ python -m pip install -r ComfyUI-llama-cpp/requirements.txt
 
 #### Download models:  
 - Place your model files in the `ComfyUI/models/LLM` folder.  
+- Optional: place LoRA adapter files in the `ComfyUI/models/LLM/lora` folder and select one in the loader node (`lora` + `lora_scale`). Requires the [JamePeng llama-cpp-python fork](https://github.com/JamePeng/llama-cpp-python).
 
 	> If you need a VLM model to process image input, don't forget to download the `mmproj` weights.
 
