@@ -185,6 +185,10 @@ class LLAMA_CPP_STORAGE:
     def clean(cls, all=False):
         try:
             if cls.llm:
+                if hasattr(cls.llm, "unload_all_loras"):
+                    # The JamePeng fork crashes in unload_lora() when close() is
+                    # called with LoRA adapters still loaded, so unload them first.
+                    cls.llm.unload_all_loras()
                 cls.llm.close()
         except Exception:
             pass
@@ -340,6 +344,24 @@ class LLAMA_CPP_STORAGE:
 
         cls.llm = Llama(**kwargs)
 
+        lora = config.get("lora")
+        lora_scale = config.get("lora_scale", 1.0)
+        if lora and lora != "None":
+            if not hasattr(cls.llm, "load_lora") or "active_loras" not in inspect.signature(Llama.eval).parameters:
+                raise RuntimeError('"lora" is unavailable! Please upgrade to the JamePeng llama-cpp-python fork from "https://github.com/JamePeng/llama-cpp-python/releases".')
+            lora_path = folder_paths.get_full_path("LLM_LORA", lora)
+            lora_name = os.path.splitext(os.path.basename(lora))[0]
+            print(f"[llama-cpp_vlm] Loading LoRA: {lora} (scale={lora_scale})")
+            cls.llm.load_lora(lora_name, lora_path)
+            # MTMD-based chat handlers (all VLM handlers) swallow the `active_loras`
+            # kwarg of create_chat_completion, so inject the adapter into every eval
+            # call instead. This covers both the handler's prompt evals and the
+            # generation evals inside create_completion.
+            _orig_eval = cls.llm.eval
+            def eval_with_lora(tokens, *args, active_loras=None, **kwargs):
+                return _orig_eval(tokens, *args, active_loras=[{"name": lora_name, "scale": float(lora_scale)}], **kwargs)
+            cls.llm.eval = eval_with_lora
+
 any_type = AnyType("*")
 
 if not hasattr(mm, "unload_all_models_backup"):
@@ -353,6 +375,7 @@ if not hasattr(mm, "unload_all_models_backup"):
 
 llm_extensions = ['.ckpt', '.pt', '.bin', '.pth', '.safetensors', '.gguf']
 folder_paths.folder_names_and_paths["LLM"] = ([os.path.join(folder_paths.models_dir, "LLM")], llm_extensions)
+folder_paths.folder_names_and_paths["LLM_LORA"] = ([os.path.join(folder_paths.models_dir, "LLM", "lora")], ['.bin', '.pt', '.pth', '.safetensors', '.gguf'])
 preset_prompts = {
     "Empty - Nothing": "",
     "Normal - Describe": "Describe this @.",
@@ -458,7 +481,8 @@ class llama_cpp_model_loader:
         all_llms = folder_paths.get_filename_list("LLM")
         model_list = [f for f in all_llms if "mmproj" not in f.lower()]
         mmproj_list = ["None"] + [f for f in all_llms if "mmproj" in f.lower()]
-            
+        lora_list = ["None"] + folder_paths.get_filename_list("LLM_LORA")
+
         return {"required": {
             "model": (model_list,),
             "mmproj": (mmproj_list, {"default": "None"}),
@@ -476,6 +500,11 @@ class llama_cpp_model_loader:
             "image_min_tokens": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32}),
             "image_max_tokens": ("INT", {"default": 0, "min": 0, "max": 4096, "step": 32}),
             "load_mtp": ("BOOLEAN", {"default": False}),
+            "lora": (lora_list, {
+                "default": "None",
+                "tooltip": "LoRA adapter to apply (requires the JamePeng llama-cpp-python fork).\nPlace adapter files in ComfyUI/models/LLM/lora."
+            }),
+            "lora_scale": ("FLOAT", {"default": 1.0, "min": -4.0, "max": 4.0, "step": 0.01}),
             }
         }
 
@@ -484,7 +513,7 @@ class llama_cpp_model_loader:
     FUNCTION = "loadmodel"
     CATEGORY = "llama-cpp-vlm"
 
-    def loadmodel(self, model, mmproj, chat_handler, n_ctx, vram_limit, image_min_tokens, image_max_tokens, load_mtp):
+    def loadmodel(self, model, mmproj, chat_handler, n_ctx, vram_limit, image_min_tokens, image_max_tokens, load_mtp, lora="None", lora_scale=1.0):
         custom_config = {
             "model": model,
             "mmproj": mmproj,
@@ -493,7 +522,9 @@ class llama_cpp_model_loader:
             "vram_limit": vram_limit,
             "image_min_tokens": image_min_tokens,
             "image_max_tokens": image_max_tokens,
-            "load_mtp": load_mtp
+            "load_mtp": load_mtp,
+            "lora": lora,
+            "lora_scale": lora_scale
         }
         if not LLAMA_CPP_STORAGE.llm or LLAMA_CPP_STORAGE.current_config != custom_config:
             print("[llama-cpp_vlm] Loading model...")
